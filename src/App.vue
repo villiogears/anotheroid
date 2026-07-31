@@ -20,7 +20,7 @@ interface ExportedFunc {
   kind: string
 }
 const exportedFunctions = ref<ExportedFunc[]>([])
-const selectedFunc = ref<string>('add')
+const selectedFunc = ref<string>('')
 
 // WebAssembly インスタンス
 let wasmInstance: any = null
@@ -28,17 +28,6 @@ let wasmModule: WebAssembly.Module | null = null
 
 // Canvas 参照
 const wasmCanvas = ref<HTMLCanvasElement | null>(null)
-
-/**
- * 組み込みのテスト用 WebAssembly バイナリ（i32加算関数 add(a, b)）
- */
-const defaultWasmCode = new Uint8Array([
-  0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
-  0x01, 0x07, 0x01, 0x60, 0x02, 0x7f, 0x7f, 0x01, 0x7f,
-  0x03, 0x02, 0x01, 0x00,
-  0x07, 0x07, 0x01, 0x03, 0x61, 0x64, 0x64, 0x00, 0x00,
-  0x0a, 0x09, 0x01, 0x07, 0x00, 0x20, 0x00, 0x20, 0x01, 0x6a, 0x0b
-])
 
 // テーマ切り替え
 const toggleTheme = () => {
@@ -198,17 +187,11 @@ const executeWasm = () => {
   }
 }
 
-const loadDefaultWasm = () => {
-  wasmType.value = 'function'
-  loadWasmBuffer(defaultWasmCode.buffer, 'sample_add.wasm')
-}
-
 const onFullscreenChange = () => {
   isFullscreen.value = !!document.fullscreenElement
 }
 
 onMounted(() => {
-  loadDefaultWasm()
   document.addEventListener('fullscreenchange', onFullscreenChange)
 })
 
@@ -255,9 +238,6 @@ onUnmounted(() => {
               class="hidden-input"
             />
           </label>
-          <button class="md-button md-button-outlined" @click="loadDefaultWasm">
-            サンプル関数
-          </button>
         </div>
       </section>
 
@@ -290,7 +270,7 @@ onUnmounted(() => {
               @click="toggleFullscreen" 
               title="全画面表示"
             >
-              <span class="material-icon">{{ isFullscreen ? 'fullscreen_exit' : 'fullscreen' }}</span>
+              <img src="/4.svg" alt="全画面表示" class="fullscreen-icon-img" />
             </button>
           </div>
         </div>
@@ -309,7 +289,8 @@ onUnmounted(() => {
             class="exit-fullscreen-btn md-button md-button-filled"
             @click="toggleFullscreen"
           >
-            <span class="material-icon"></span>
+            <img src="/4.svg" alt="全画面表示解除" class="btn-icon-img" />
+            全画面表示を解除
           </button>
         </div>
 
@@ -466,6 +447,12 @@ body {
   height: 20px;
   display: inline-block;
   vertical-align: middle;
+}
+
+.fullscreen-icon-img {
+  width: 24px;
+  height: 24px;
+  display: block;
 }
 
 .upload-card h2 {
