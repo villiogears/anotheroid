@@ -4,7 +4,7 @@ import { ref, onMounted, onUnmounted, nextTick } from 'vue'
 // リアクティブ変数の定義
 const isDarkMode = ref<boolean>(false)
 const isLoaded = ref<boolean>(false)
-const statusMessage = ref<string>('WASMファイルを選択するか、ドラッグ＆ドロップしてください')
+const statusMessage = ref<string>('WASMファイルを選択してください')
 const fileName = ref<string>('')
 const wasmType = ref<'canvas' | 'function'>('canvas')
 const isFullscreen = ref<boolean>(false)
