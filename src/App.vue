@@ -222,7 +222,6 @@ onUnmounted(() => {
 
 <template>
   <div class="app-shell" :class="{ 'dark-theme': isDarkMode }">
-    <!-- Material 3 アプリバー -->
     <header class="md-top-app-bar">
       <div class="app-bar-brand">
         <span class="material-icon">view_in_ar</span>
@@ -230,29 +229,27 @@ onUnmounted(() => {
       </div>
       
       <div class="app-bar-actions">
-        <!-- テーマ切り替えボタン -->
-        <button class="icon-btn" @click="toggleTheme" :title="isDarkMode ? 'ライトモードに切替' : 'ダークモードに切替'">
-          <span class="material-icon">{{ isDarkMode ? 'light_mode' : 'dark_mode' }}</span>
+        <button class="icon-btn theme-svg-btn" @click="toggleTheme" :title="isDarkMode ? 'ライトモードに切替' : 'ダークモードに切替'">
+          <img :src="isDarkMode ? '/2.svg' : '/1.svg'" :alt="isDarkMode ? 'ライトモードに切り替え' : 'ダークモードに切り替え'" class="theme-icon-img" />
         </button>
       </div>
     </header>
 
     <main class="main-content">
-      <!-- アップロードエリア（Material Card） -->
       <section 
         class="md-card upload-card"
         @drop="handleDrop"
         @dragover="handleDragOver"
       >
         <div class="upload-icon">
-          <span class="material-icon">file_upload</span>
+          <img src="/3.svg" alt="アップロード" class="custom-icon-img" />
         </div>
         <h2>WASM モジュールをロード</h2>
         <p>Golang (Gio UI等)、Rust、C++の `.wasm` ファイルに対応</p>
 
         <div class="button-row">
           <label class="md-button md-button-filled">
-            <span class="material-icon">add</span>
+            <img src="/3.svg" alt="追加" class="btn-icon-img" />
             ファイルを選択
             <input 
               type="file" 
@@ -267,7 +264,6 @@ onUnmounted(() => {
         </div>
       </section>
 
-      <!-- WASM 表示・制御セクション -->
       <section class="md-card display-card">
         <div class="card-header">
           <div class="status-indicator" :class="{ active: isLoaded }">
@@ -275,7 +271,6 @@ onUnmounted(() => {
             <span>{{ statusMessage }}</span>
           </div>
 
-          <!-- WASM 表示モード切り替え & 全画面ボタン -->
           <div class="control-actions" v-if="isLoaded">
             <div class="segmented-button">
               <button 
@@ -303,14 +298,12 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <!-- 1. GUI / Canvas モード (Gio UI / Canvas描画用) -->
         <div 
           v-show="isLoaded && wasmType === 'canvas'" 
           id="wasm-container" 
           class="canvas-container"
           :class="{ 'is-fullscreen': isFullscreen }"
         >
-          <!-- Golang Gio等で自動参照される標準ID 'wasm-canvas' または動的参照 -->
           <canvas id="wasm-canvas" ref="wasmCanvas"></canvas>
           
           <button 
@@ -323,7 +316,6 @@ onUnmounted(() => {
           </button>
         </div>
 
-        <!-- 2. 関数呼び出しモード -->
         <div v-show="isLoaded && wasmType === 'function'" class="function-container">
           <div class="md-text-field" v-if="exportedFunctions.length > 0">
             <label>実行関数:</label>
@@ -465,6 +457,19 @@ body {
   margin: 0 auto 12px;
 }
 
+.custom-icon-img {
+  width: 28px;
+  height: 28px;
+  display: block;
+}
+
+.btn-icon-img {
+  width: 20px;
+  height: 20px;
+  display: inline-block;
+  vertical-align: middle;
+}
+
 .upload-card h2 {
   margin: 0 0 6px 0;
   font-size: 1.2rem;
@@ -533,6 +538,12 @@ body {
 
 .icon-btn:hover {
   background-color: var(--md-sys-color-border);
+}
+
+.theme-icon-img {
+  width: 24px;
+  height: 24px;
+  display: block;
 }
 
 /* ステータスバー & コントロール */
