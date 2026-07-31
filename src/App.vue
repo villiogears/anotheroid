@@ -1,16 +1,20 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted, nextTick } from 'vue'
 
 // リアクティブ変数の定義
+const isDarkMode = ref<boolean>(false)
+const isLoaded = ref<boolean>(false)
+const statusMessage = ref<string>('WASMファイルを選択するか、ドラッグ＆ドロップしてください')
+const fileName = ref<string>('')
+const wasmType = ref<'canvas' | 'function'>('canvas')
+const isFullscreen = ref<boolean>(false)
+
+// 数値計算型WASM用
 const num1 = ref<number>(10)
 const num2 = ref<number>(25)
 const result = ref<number | string | null>(null)
-const isLoaded = ref<boolean>(false)
-const statusMessage = ref<string>('ファイルを選択するか、ドラッグ＆ドロップしてください')
 const executionTime = ref<string>('')
-const fileName = ref<string>('')
 
-// エクスポート関数の情報
 interface ExportedFunc {
   name: string
   kind: string
@@ -21,6 +25,9 @@ const selectedFunc = ref<string>('add')
 // WebAssembly インスタンス
 let wasmInstance: any = null
 let wasmModule: WebAssembly.Module | null = null
+
+// Canvas 参照
+const wasmCanvas = ref<HTMLCanvasElement | null>(null)
 
 /**
  * 組み込みのテスト用 WebAssembly バイナリ（i32加算関数 add(a, b)）
@@ -33,33 +40,103 @@ const defaultWasmCode = new Uint8Array([
   0x0a, 0x09, 0x01, 0x07, 0x00, 0x20, 0x00, 0x20, 0x01, 0x6a, 0x0b
 ])
 
-// WASM ArrayBuffer からインスタンス化する処理
+// テーマ切り替え
+const toggleTheme = () => {
+  isDarkMode.value = !isDarkMode.value
+  if (isDarkMode.value) {
+    document.documentElement.classList.add('dark')
+  } else {
+    document.documentElement.classList.remove('dark')
+  }
+}
+
+// 全画面切り替え
+const toggleFullscreen = () => {
+  const element = document.getElementById('wasm-container')
+  if (!element) return
+
+  if (!document.fullscreenElement) {
+    element.requestFullscreen().then(() => {
+      isFullscreen.value = true
+    }).catch(err => {
+      console.error('全画面表示エラー:', err)
+    })
+  } else {
+    document.exitFullscreen().then(() => {
+      isFullscreen.value = false
+    })
+  }
+}
+
+// WASM ArrayBuffer からの読み込み処理
 const loadWasmBuffer = async (buffer: ArrayBuffer, name: string) => {
   try {
     statusMessage.value = 'WebAssembly モジュールを解析中...'
     
-    // モジュールのコンパイルとインスタンス化
+    // Go (wasm_exec.js) などの環境変数の互換性チェック
+    const go = (window as any).Go ? new (window as any).Go() : null
+    const importObject = go ? go.importObject : {}
+
     wasmModule = await WebAssembly.compile(buffer)
-    const instance = await WebAssembly.instantiate(wasmModule)
+    
+    // インスタンス化
+    const instance = await WebAssembly.instantiate(wasmModule, importObject)
     wasmInstance = instance
 
-    // エクスポートされている関数群を検出
+    // GoのWASMエントリーポイント実行 (Gio UI等)
+    if (go && typeof go.run === 'function') {
+      go.run(instance)
+      wasmType.value = 'canvas'
+    }
+
+    // エクスポート関数の検出
     const exportsInfo = WebAssembly.Module.exports(wasmModule)
     exportedFunctions.value = exportsInfo.filter(exp => exp.kind === 'function')
 
     if (exportedFunctions.value.length > 0) {
       selectedFunc.value = exportedFunctions.value[0].name
+      // Canvas描画系のWASM（Gio / Ebitengine / Rust / Emscripten等）の判定
+      const hasMainOrRun = exportedFunctions.value.some(f => ['main', 'run', '_main', 'step'].includes(f.name))
+      if (hasMainOrRun && !go) {
+        wasmType.value = 'canvas'
+      }
     }
 
     fileName.value = name
     isLoaded.value = true
-    statusMessage.value = `「${name}」を正常に読み込みました！`
-    executeWasm()
+    statusMessage.value = `「${name}」を正常に読み込みました`
+
+    await nextTick()
+    if (wasmType.value === 'function') {
+      executeWasm()
+    } else {
+      initCanvasDraw()
+    }
   } catch (error) {
     console.error('WASM 読み込みエラー:', error)
     isLoaded.value = false
-    statusMessage.value = 'WASM ファイルの解析に失敗しました。正しいフォーマットか確認してください。'
+    statusMessage.value = 'WASM ファイルの解析に失敗しました。'
   }
+}
+
+// デモ用 Canvas 描画の初期化（WASMが標準Canvasを使う場合）
+const initCanvasDraw = () => {
+  if (!wasmCanvas.value) return
+  const ctx = wasmCanvas.value.getContext('2d')
+  if (!ctx) return
+
+  // Canvasの初期設定（サイズレスポンシブ）
+  wasmCanvas.value.width = wasmCanvas.value.parentElement?.clientWidth || 600
+  wasmCanvas.value.height = 400
+
+  // デモ用の視覚的なアニメーション（WASM連携の準備完了プレースホルダー）
+  ctx.fillStyle = isDarkMode.value ? '#1e293b' : '#f1f5f9'
+  ctx.fillRect(0, 0, wasmCanvas.value.width, wasmCanvas.value.height)
+  
+  ctx.fillStyle = '#6366f1'
+  ctx.font = 'bold 20px sans-serif'
+  ctx.textAlign = 'center'
+  ctx.fillText('WASM GUI 描画エリア (Canvas Ready)', wasmCanvas.value.width / 2, wasmCanvas.value.height / 2)
 }
 
 // ファイル選択ハンドラー
@@ -112,11 +189,9 @@ const executeWasm = () => {
 
   try {
     const startTime = performance.now()
-    
-    // 入力値に応じて呼び出し
     const res = func(num1.value, num2.value)
-    
     const endTime = performance.now()
+    
     executionTime.value = (endTime - startTime).toFixed(4)
     result.value = res !== undefined ? res : '実行完了 (戻り値なし)'
   } catch (err: any) {
@@ -125,315 +200,487 @@ const executeWasm = () => {
   }
 }
 
-// デフォルトのサンプルWASMを読み込む
 const loadDefaultWasm = () => {
+  wasmType.value = 'function'
   loadWasmBuffer(defaultWasmCode.buffer, 'sample_add.wasm')
+}
+
+// フルスクリーン状態変更イベントの検出
+const onFullscreenChange = () => {
+  isFullscreen.value = !!document.fullscreenElement
 }
 
 onMounted(() => {
   loadDefaultWasm()
+  document.addEventListener('fullscreenchange', onFullscreenChange)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('fullscreenchange', onFullscreenChange)
 })
 </script>
 
 <template>
-  <main class="container">
-    <header class="header">
-      <h1>Vue.js + WebAssembly</h1>
-      <p class="subtitle">ローカル `.wasm` ファイルのアップロード & 実行環境</p>
-    </header>
-
-    <!-- ファイル選択・ドロップエリア -->
-    <section 
-      class="upload-card"
-      @drop="handleDrop"
-      @dragover="handleDragOver"
-    >
-      <div class="upload-icon">📁</div>
-      <h3>WASM ファイルをアップロード</h3>
-      <p>ローカルデバイスから `.wasm` ファイルを選択またはドロップしてください</p>
-
-      <div class="button-group">
-        <label class="file-label">
-          ファイルを選択
-          <input 
-            type="file" 
-            accept=".wasm" 
-            @change="handleFileChange" 
-            class="file-input"
-          />
-        </label>
-        <button class="sample-btn" @click="loadDefaultWasm">
-          サンプルWASMを試す
+  <div class="app-shell" :class="{ 'dark-theme': isDarkMode }">
+    <!-- Material 3 アプリバー -->
+    <header class="md-top-app-bar">
+      <div class="app-bar-brand">
+        <span class="material-icon">view_in_ar</span>
+        <h1>WASM Studio</h1>
+      </div>
+      
+      <div class="app-bar-actions">
+        <!-- テーマ切り替えボタン -->
+        <button class="icon-btn" @click="toggleTheme" :title="isDarkMode ? 'ライトモードに切替' : 'ダークモードに切替'">
+          <span class="material-icon">{{ isDarkMode ? 'light_mode' : 'dark_mode' }}</span>
         </button>
       </div>
-    </section>
+    </header>
 
-    <!-- 実行・結果カード -->
-    <section class="card">
-      <div class="status-bar" :class="{ success: isLoaded }">
-        <span class="dot"></span>
-        <span>{{ statusMessage }}</span>
-      </div>
-
-      <div v-if="isLoaded" class="content">
-        <!-- エクスポート関数選択 -->
-        <div class="form-group" v-if="exportedFunctions.length > 0">
-          <label>実行する関数を選択:</label>
-          <select v-model="selectedFunc" @change="executeWasm" class="select-box">
-            <option v-for="fn in exportedFunctions" :key="fn.name" :value="fn.name">
-              {{ fn.name }} ()
-            </option>
-          </select>
+    <main class="main-content">
+      <!-- アップロードエリア（Material Card） -->
+      <section 
+        class="md-card upload-card"
+        @drop="handleDrop"
+        @dragover="handleDragOver"
+      >
+        <div class="upload-icon">
+          <span class="material-icon">file_upload</span>
         </div>
+        <h2>WASM モジュールをロード</h2>
+        <p>Golang (Gio UI等)、Rust、C++の `.wasm` ファイルに対応</p>
 
-        <!-- 引数入力フォーム -->
-        <div class="calculator">
-          <div class="input-group">
-            <label>引数 1 (a)</label>
+        <div class="button-row">
+          <label class="md-button md-button-filled">
+            <span class="material-icon">add</span>
+            ファイルを選択
             <input 
-              v-model.number="num1" 
-              type="number" 
-              @input="executeWasm" 
-              placeholder="1" 
+              type="file" 
+              accept=".wasm" 
+              @change="handleFileChange" 
+              class="hidden-input"
             />
+          </label>
+          <button class="md-button md-button-outlined" @click="loadDefaultWasm">
+            サンプル関数
+          </button>
+        </div>
+      </section>
+
+      <!-- WASM 表示・制御セクション -->
+      <section class="md-card display-card">
+        <div class="card-header">
+          <div class="status-indicator" :class="{ active: isLoaded }">
+            <span class="pulse-dot"></span>
+            <span>{{ statusMessage }}</span>
           </div>
 
-          <div class="input-group">
-            <label>引数 2 (b)</label>
-            <input 
-              v-model.number="num2" 
-              type="number" 
-              @input="executeWasm" 
-              placeholder="2" 
-            />
+          <!-- WASM 表示モード切り替え & 全画面ボタン -->
+          <div class="control-actions" v-if="isLoaded">
+            <div class="segmented-button">
+              <button 
+                :class="{ active: wasmType === 'canvas' }" 
+                @click="wasmType = 'canvas'; nextTick(initCanvasDraw)"
+              >
+                GUI / Canvas
+              </button>
+              <button 
+                :class="{ active: wasmType === 'function' }" 
+                @click="wasmType = 'function'"
+              >
+                関数実行
+              </button>
+            </div>
+
+            <button 
+              v-if="wasmType === 'canvas'"
+              class="icon-btn" 
+              @click="toggleFullscreen" 
+              title="全画面表示"
+            >
+              <span class="material-icon">{{ isFullscreen ? 'fullscreen_exit' : 'fullscreen' }}</span>
+            </button>
           </div>
         </div>
 
-        <!-- 実行結果領域 -->
-        <div class="result-container">
-          <span class="result-label">実行結果:</span>
-          <div class="result-box">
-            {{ result }}
-          </div>
+        <!-- 1. GUI / Canvas モード (Gio UI / Canvas描画用) -->
+        <div 
+          v-show="isLoaded && wasmType === 'canvas'" 
+          id="wasm-container" 
+          class="canvas-container"
+          :class="{ 'is-fullscreen': isFullscreen }"
+        >
+          <!-- Golang Gio等で自動参照される標準ID 'wasm-canvas' または動的参照 -->
+          <canvas id="wasm-canvas" ref="wasmCanvas"></canvas>
+          
+          <button 
+            v-if="isFullscreen" 
+            class="exit-fullscreen-btn md-button md-button-filled"
+            @click="toggleFullscreen"
+          >
+            <span class="material-icon">close</span>
+            全画面表示を解除
+          </button>
         </div>
 
-        <div class="metrics" v-if="executionTime">
-          実行時間: <strong>{{ executionTime }} ms</strong>
+        <!-- 2. 関数呼び出しモード -->
+        <div v-show="isLoaded && wasmType === 'function'" class="function-container">
+          <div class="md-text-field" v-if="exportedFunctions.length > 0">
+            <label>実行関数:</label>
+            <select v-model="selectedFunc" @change="executeWasm" class="md-select">
+              <option v-for="fn in exportedFunctions" :key="fn.name" :value="fn.name">
+                {{ fn.name }} ()
+              </option>
+            </select>
+          </div>
+
+          <div class="inputs-grid">
+            <div class="input-item">
+              <label>引数 1 (a)</label>
+              <input v-model.number="num1" type="number" @input="executeWasm" class="md-input" />
+            </div>
+            <div class="input-item">
+              <label>引数 2 (b)</label>
+              <input v-model.number="num2" type="number" @input="executeWasm" class="md-input" />
+            </div>
+          </div>
+
+          <div class="result-card">
+            <span class="result-title">出力結果</span>
+            <div class="result-value">{{ result }}</div>
+            <span v-if="executionTime" class="execution-time">実行時間: {{ executionTime }} ms</span>
+          </div>
         </div>
-      </div>
-    </section>
-  </main>
+      </section>
+    </main>
+  </div>
 </template>
 
-<style scoped>
-.container {
-  max-width: 600px;
-  margin: 0 auto;
-  padding: 24px;
-  font-family: system-ui, -apple-system, sans-serif;
-  color: #2c3e50;
+<style>
+/* Material Icons の読み込み */
+@import url('https://fonts.googleapis.com/icon?family=Material+Icons');
+
+/* グローバルカラー定義 (Material Design 3 Token) */
+:root {
+  --md-sys-color-bg: #f8fafc;
+  --md-sys-color-surface: #ffffff;
+  --md-sys-color-primary: #4f46e5;
+  --md-sys-color-primary-hover: #4338ca;
+  --md-sys-color-on-primary: #ffffff;
+  --md-sys-color-text: #0f172a;
+  --md-sys-color-text-secondary: #64748b;
+  --md-sys-color-border: #e2e8f0;
+  --md-sys-color-card-bg: #ffffff;
+  --md-sys-color-container: #e0e7ff;
+  --md-sys-color-on-container: #1e1b4b;
 }
 
-.header {
-  text-align: center;
-  margin-bottom: 24px;
+.dark {
+  --md-sys-color-bg: #0f172a;
+  --md-sys-color-surface: #1e293b;
+  --md-sys-color-primary: #818cf8;
+  --md-sys-color-primary-hover: #6366f1;
+  --md-sys-color-on-primary: #0f172a;
+  --md-sys-color-text: #f8fafc;
+  --md-sys-color-text-secondary: #94a3b8;
+  --md-sys-color-border: #334155;
+  --md-sys-color-card-bg: #1e293b;
+  --md-sys-color-container: #312e81;
+  --md-sys-color-on-container: #e0e7ff;
 }
 
-.header h1 {
+body {
   margin: 0;
-  font-size: 1.8rem;
-  color: #42b883;
+  padding: 0;
+  background-color: var(--md-sys-color-bg);
+  color: var(--md-sys-color-text);
+  font-family: 'Roboto', system-ui, -apple-system, sans-serif;
+  transition: background-color 0.3s, color 0.3s;
 }
 
-.subtitle {
-  margin-top: 8px;
-  color: #666;
-  font-size: 0.9rem;
+.app-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
 }
 
-.upload-card {
-  background: #f0fdf4;
-  border: 2px dashed #42b883;
-  border-radius: 12px;
+/* アプリバー */
+.md-top-app-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 24px;
+  background-color: var(--md-sys-color-surface);
+  border-bottom: 1px solid var(--md-sys-color-border);
+}
+
+.app-bar-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--md-sys-color-primary);
+}
+
+.app-bar-brand h1 {
+  font-size: 1.25rem;
+  margin: 0;
+  font-weight: 600;
+  color: var(--md-sys-color-text);
+}
+
+.main-content {
+  max-width: 800px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 24px 16px;
+  box-sizing: border-box;
+}
+
+/* Material Card */
+.md-card {
+  background-color: var(--md-sys-color-card-bg);
+  border: 1px solid var(--md-sys-color-border);
+  border-radius: 16px;
   padding: 24px;
-  text-align: center;
-  margin-bottom: 20px;
-  transition: background-color 0.2s;
+  margin-bottom: 24px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
 }
 
-.upload-card:hover {
-  background: #e6f9ed;
+/* アップロード領域 */
+.upload-card {
+  text-align: center;
+  border: 2px dashed var(--md-sys-color-primary);
+  background-color: var(--md-sys-color-surface);
 }
 
 .upload-icon {
-  font-size: 2.5rem;
-  margin-bottom: 8px;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background-color: var(--md-sys-color-container);
+  color: var(--md-sys-color-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 12px;
 }
 
-.upload-card h3 {
-  margin: 0 0 4px 0;
-  color: #2c3e50;
+.upload-card h2 {
+  margin: 0 0 6px 0;
+  font-size: 1.2rem;
 }
 
 .upload-card p {
-  margin: 0 0 16px 0;
+  color: var(--md-sys-color-text-secondary);
   font-size: 0.85rem;
-  color: #666;
+  margin-bottom: 20px;
 }
 
-.button-group {
+.button-row {
   display: flex;
   justify-content: center;
   gap: 12px;
 }
 
-.file-label {
-  background-color: #42b883;
-  color: white;
-  padding: 10px 18px;
-  border-radius: 8px;
+/* Material Buttons */
+.md-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  border-radius: 20px;
   font-size: 0.9rem;
-  font-weight: bold;
+  font-weight: 500;
   cursor: pointer;
-  transition: background-color 0.2s;
+  border: none;
+  transition: all 0.2s;
 }
 
-.file-label:hover {
-  background-color: #33a06f;
+.md-button-filled {
+  background-color: var(--md-sys-color-primary);
+  color: var(--md-sys-color-on-primary);
 }
 
-.file-input {
+.md-button-filled:hover {
+  background-color: var(--md-sys-color-primary-hover);
+}
+
+.md-button-outlined {
+  background-color: transparent;
+  border: 1px solid var(--md-sys-color-border);
+  color: var(--md-sys-color-text);
+}
+
+.md-button-outlined:hover {
+  background-color: var(--md-sys-color-container);
+}
+
+.hidden-input {
   display: none;
 }
 
-.sample-btn {
-  background-color: #ffffff;
-  color: #2c3e50;
-  border: 1px solid #ccc;
-  padding: 10px 18px;
-  border-radius: 8px;
-  font-size: 0.9rem;
+.icon-btn {
+  background: none;
+  border: none;
+  color: var(--md-sys-color-text);
+  padding: 8px;
+  border-radius: 50%;
   cursor: pointer;
-  transition: border-color 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.sample-btn:hover {
-  border-color: #42b883;
+.icon-btn:hover {
+  background-color: var(--md-sys-color-border);
 }
 
-.card {
-  background: #ffffff;
-  border-radius: 12px;
-  padding: 20px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-  border: 1px solid #eef2f5;
+/* ステータスバー & コントロール */
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+  gap: 12px;
 }
 
-.status-bar {
+.status-indicator {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 14px;
-  border-radius: 6px;
-  background-color: #fff3cd;
-  color: #856404;
   font-size: 0.85rem;
-  margin-bottom: 20px;
+  color: var(--md-sys-color-text-secondary);
 }
 
-.status-bar.success {
-  background-color: #d4edda;
-  color: #155724;
+.status-indicator.active {
+  color: var(--md-sys-color-primary);
+  font-weight: 500;
 }
 
-.dot {
-  width: 8px;
-  height: 8px;
+.pulse-dot {
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
-  background-color: currentColor;
+  background-color: var(--md-sys-color-primary);
 }
 
-.form-group {
+.control-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* Segmented Button (タブ切り替え) */
+.segmented-button {
+  display: flex;
+  border: 1px solid var(--md-sys-color-border);
+  border-radius: 20px;
+  overflow: hidden;
+}
+
+.segmented-button button {
+  background: none;
+  border: none;
+  padding: 6px 16px;
+  font-size: 0.85rem;
+  color: var(--md-sys-color-text);
+  cursor: pointer;
+}
+
+.segmented-button button.active {
+  background-color: var(--md-sys-color-container);
+  color: var(--md-sys-color-on-container);
+  font-weight: bold;
+}
+
+/* Canvas / Fullscreen */
+.canvas-container {
+  position: relative;
+  width: 100%;
+  background-color: #000;
+  border-radius: 12px;
+  overflow: hidden;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 400px;
+}
+
+canvas {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+
+.canvas-container.is-fullscreen {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 9999;
+  border-radius: 0;
+}
+
+.exit-fullscreen-btn {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 10000;
+}
+
+/* 関数実行フォーム */
+.md-text-field {
   margin-bottom: 16px;
 }
 
-.form-group label {
+.md-text-field label {
   display: block;
-  font-size: 0.85rem;
-  font-weight: bold;
+  font-size: 0.8rem;
+  color: var(--md-sys-color-text-secondary);
   margin-bottom: 6px;
-  color: #444;
 }
 
-.select-box {
+.md-select, .md-input {
   width: 100%;
   padding: 10px;
-  border: 2px solid #ddd;
   border-radius: 8px;
-  font-size: 1rem;
-  outline: none;
-  background-color: #fff;
+  border: 1px solid var(--md-sys-color-border);
+  background-color: var(--md-sys-color-surface);
+  color: var(--md-sys-color-text);
+  box-sizing: border-box;
 }
 
-.calculator {
-  display: flex;
+.inputs-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 12px;
   margin-bottom: 16px;
 }
 
-.input-group {
-  flex: 1;
+.result-card {
+  background-color: var(--md-sys-color-container);
+  color: var(--md-sys-color-on-container);
+  padding: 16px;
+  border-radius: 12px;
+  text-align: center;
 }
 
-.input-group label {
+.result-title {
+  font-size: 0.8rem;
+  opacity: 0.8;
+}
+
+.result-value {
+  font-size: 1.5rem;
+  font-weight: bold;
+  margin: 6px 0;
+}
+
+.execution-time {
+  font-size: 0.75rem;
+  opacity: 0.7;
   display: block;
-  font-size: 0.8rem;
-  color: #666;
-  margin-bottom: 4px;
-}
-
-input[type="number"] {
-  width: 100%;
-  padding: 10px;
-  font-size: 1.1rem;
-  border: 2px solid #ddd;
-  border-radius: 8px;
-  text-align: center;
-  outline: none;
-  box-sizing: border-box;
-}
-
-input[type="number"]:focus {
-  border-color: #42b883;
-}
-
-.result-container {
-  margin-top: 16px;
-}
-
-.result-label {
-  font-size: 0.85rem;
-  font-weight: bold;
-  color: #444;
-}
-
-.result-box {
-  margin-top: 6px;
-  padding: 14px;
-  font-size: 1.3rem;
-  font-weight: bold;
-  background-color: #f8f9fa;
-  border: 2px solid #42b883;
-  border-radius: 8px;
-  text-align: center;
-  color: #42b883;
-  word-break: break-all;
-}
-
-.metrics {
-  font-size: 0.8rem;
-  color: #888;
-  text-align: right;
-  margin-top: 12px;
 }
 </style>
