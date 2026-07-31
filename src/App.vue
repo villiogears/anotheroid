@@ -119,21 +119,19 @@ const loadWasmBuffer = async (buffer: ArrayBuffer, name: string) => {
   }
 }
 
-// デモ用 Canvas 描画の初期化（WASMが標準Canvasを使う場合）
+// デモ用 Canvas 描画の初期化
 const initCanvasDraw = () => {
   if (!wasmCanvas.value) return
   const ctx = wasmCanvas.value.getContext('2d')
   if (!ctx) return
 
-  // Canvasの初期設定（サイズレスポンシブ）
   wasmCanvas.value.width = wasmCanvas.value.parentElement?.clientWidth || 600
   wasmCanvas.value.height = 400
 
-  // デモ用の視覚的なアニメーション（WASM連携の準備完了プレースホルダー）
-  ctx.fillStyle = isDarkMode.value ? '#1e293b' : '#f1f5f9'
+  ctx.fillStyle = isDarkMode.value ? '#111827' : '#f3f4f6'
   ctx.fillRect(0, 0, wasmCanvas.value.width, wasmCanvas.value.height)
   
-  ctx.fillStyle = '#6366f1'
+  ctx.fillStyle = '#2563eb'
   ctx.font = 'bold 20px sans-serif'
   ctx.textAlign = 'center'
   ctx.fillText('WASM GUI 描画エリア (Canvas Ready)', wasmCanvas.value.width / 2, wasmCanvas.value.height / 2)
@@ -205,7 +203,6 @@ const loadDefaultWasm = () => {
   loadWasmBuffer(defaultWasmCode.buffer, 'sample_add.wasm')
 }
 
-// フルスクリーン状態変更イベントの検出
 const onFullscreenChange = () => {
   isFullscreen.value = !!document.fullscreenElement
 }
@@ -298,6 +295,7 @@ onUnmounted(() => {
           </div>
         </div>
 
+        <!-- 1. GUI / Canvas モード -->
         <div 
           v-show="isLoaded && wasmType === 'canvas'" 
           id="wasm-container" 
@@ -316,6 +314,7 @@ onUnmounted(() => {
           </button>
         </div>
 
+        <!-- 2. 関数呼び出しモード -->
         <div v-show="isLoaded && wasmType === 'function'" class="function-container">
           <div class="md-text-field" v-if="exportedFunctions.length > 0">
             <label>実行関数:</label>
@@ -352,33 +351,33 @@ onUnmounted(() => {
 /* Material Icons の読み込み */
 @import url('https://fonts.googleapis.com/icon?family=Material+Icons');
 
-/* グローバルカラー定義 (Material Design 3 Token) */
+/* グローバルカラー定義 (ブルー / グレーベース) */
 :root {
   --md-sys-color-bg: #f8fafc;
   --md-sys-color-surface: #ffffff;
-  --md-sys-color-primary: #4f46e5;
-  --md-sys-color-primary-hover: #4338ca;
+  --md-sys-color-primary: #2563eb;
+  --md-sys-color-primary-hover: #1d4ed8;
   --md-sys-color-on-primary: #ffffff;
   --md-sys-color-text: #0f172a;
   --md-sys-color-text-secondary: #64748b;
   --md-sys-color-border: #e2e8f0;
   --md-sys-color-card-bg: #ffffff;
-  --md-sys-color-container: #e0e7ff;
-  --md-sys-color-on-container: #1e1b4b;
+  --md-sys-color-container: #eff6ff;
+  --md-sys-color-on-container: #1e3a8a;
 }
 
 .dark {
   --md-sys-color-bg: #0f172a;
   --md-sys-color-surface: #1e293b;
-  --md-sys-color-primary: #818cf8;
-  --md-sys-color-primary-hover: #6366f1;
+  --md-sys-color-primary: #3b82f6;
+  --md-sys-color-primary-hover: #60a5fa;
   --md-sys-color-on-primary: #0f172a;
   --md-sys-color-text: #f8fafc;
   --md-sys-color-text-secondary: #94a3b8;
   --md-sys-color-border: #334155;
   --md-sys-color-card-bg: #1e293b;
-  --md-sys-color-container: #312e81;
-  --md-sys-color-on-container: #e0e7ff;
+  --md-sys-color-container: #1e3a8a;
+  --md-sys-color-on-container: #dbeafe;
 }
 
 body {
