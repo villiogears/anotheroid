@@ -131,7 +131,7 @@ const initCanvasDraw = () => {
   ctx.fillStyle = isDarkMode.value ? '#111827' : '#f3f4f6'
   ctx.fillRect(0, 0, wasmCanvas.value.width, wasmCanvas.value.height)
   
-  ctx.fillStyle = '#2563eb'
+  ctx.fillStyle = isDarkMode.value ? '#ffffff' : '#000000'
   ctx.font = 'bold 20px sans-serif'
   ctx.textAlign = 'center'
   ctx.fillText('WASM GUI 描画エリア (Canvas Ready)', wasmCanvas.value.width / 2, wasmCanvas.value.height / 2)
@@ -351,19 +351,19 @@ onUnmounted(() => {
 /* Material Icons の読み込み */
 @import url('https://fonts.googleapis.com/icon?family=Material+Icons');
 
-/* グローバルカラー定義 (ブルー / グレーベース) */
+/* グローバルカラー定義 */
 :root {
   --md-sys-color-bg: #f8fafc;
   --md-sys-color-surface: #ffffff;
   --md-sys-color-primary: #2563eb;
   --md-sys-color-primary-hover: #1d4ed8;
   --md-sys-color-on-primary: #ffffff;
-  --md-sys-color-text: #0f172a;
-  --md-sys-color-text-secondary: #64748b;
+  --md-sys-color-text: #000000;
+  --md-sys-color-text-secondary: #000000;
   --md-sys-color-border: #e2e8f0;
   --md-sys-color-card-bg: #ffffff;
   --md-sys-color-container: #eff6ff;
-  --md-sys-color-on-container: #1e3a8a;
+  --md-sys-color-on-container: #000000;
 }
 
 .dark {
@@ -371,13 +371,13 @@ onUnmounted(() => {
   --md-sys-color-surface: #1e293b;
   --md-sys-color-primary: #3b82f6;
   --md-sys-color-primary-hover: #60a5fa;
-  --md-sys-color-on-primary: #0f172a;
-  --md-sys-color-text: #f8fafc;
-  --md-sys-color-text-secondary: #94a3b8;
+  --md-sys-color-on-primary: #ffffff;
+  --md-sys-color-text: #ffffff;
+  --md-sys-color-text-secondary: #ffffff;
   --md-sys-color-border: #334155;
   --md-sys-color-card-bg: #1e293b;
   --md-sys-color-container: #1e3a8a;
-  --md-sys-color-on-container: #dbeafe;
+  --md-sys-color-on-container: #ffffff;
 }
 
 body {
@@ -472,6 +472,7 @@ body {
 .upload-card h2 {
   margin: 0 0 6px 0;
   font-size: 1.2rem;
+  color: var(--md-sys-color-text);
 }
 
 .upload-card p {
@@ -564,7 +565,7 @@ body {
 }
 
 .status-indicator.active {
-  color: var(--md-sys-color-primary);
+  color: var(--md-sys-color-text);
   font-weight: 500;
 }
 
@@ -669,6 +670,10 @@ canvas {
   margin-bottom: 16px;
 }
 
+.input-item label {
+  color: var(--md-sys-color-text-secondary);
+}
+
 .result-card {
   background-color: var(--md-sys-color-container);
   color: var(--md-sys-color-on-container);
@@ -679,18 +684,21 @@ canvas {
 
 .result-title {
   font-size: 0.8rem;
-  opacity: 0.8;
+  color: var(--md-sys-color-on-container);
+  opacity: 0.9;
 }
 
 .result-value {
   font-size: 1.5rem;
   font-weight: bold;
   margin: 6px 0;
+  color: var(--md-sys-color-on-container);
 }
 
 .execution-time {
   font-size: 0.75rem;
-  opacity: 0.7;
+  color: var(--md-sys-color-on-container);
+  opacity: 0.8;
   display: block;
 }
 </style>
