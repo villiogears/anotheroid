@@ -309,8 +309,7 @@ onUnmounted(() => {
             class="exit-fullscreen-btn md-button md-button-filled"
             @click="toggleFullscreen"
           >
-            <span class="material-icon">close</span>
-            全画面表示を解除
+            <span class="material-icon"></span>
           </button>
         </div>
 
