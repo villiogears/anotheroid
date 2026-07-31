@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "composite": true,
+    "moduleResolution": "Bundler",
+    "allowSyntheticDefaultImports": true
+  },
+  "include": [
+    "vite.config.ts"  // <-- ここを vite.config.ts から vite.config.mts に変更
+  ]
+}
