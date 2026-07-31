@@ -221,8 +221,8 @@ onUnmounted(() => {
   <div class="app-shell" :class="{ 'dark-theme': isDarkMode }">
     <header class="md-top-app-bar">
       <div class="app-bar-brand">
-        <span class="material-icon">view_in_ar</span>
-        <h1>WASM Studio</h1>
+        <span class="material-icon"></span>
+        <h1>Anotheroid</h1>
       </div>
       
       <div class="app-bar-actions">
