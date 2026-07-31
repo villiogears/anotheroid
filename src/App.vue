@@ -134,7 +134,7 @@ const initCanvasDraw = () => {
   ctx.fillStyle = isDarkMode.value ? '#ffffff' : '#000000'
   ctx.font = 'bold 20px sans-serif'
   ctx.textAlign = 'center'
-  ctx.fillText('WASM GUI 描画エリア (Canvas Ready)', wasmCanvas.value.width / 2, wasmCanvas.value.height / 2)
+  ctx.fillText('WASM GUI', wasmCanvas.value.width / 2, wasmCanvas.value.height / 2)
 }
 
 // ファイル選択ハンドラー
