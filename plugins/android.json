@@ -10,6 +10,9 @@
     "cordova-plugin-file": {
       "ANDROIDX_WEBKIT_VERSION": "1.4.0",
       "PACKAGE_NAME": "org.elphadeal.anotheroid"
+    },
+    "cordova-plugin-statusbar": {
+      "PACKAGE_NAME": "org.elphadeal.anotheroid"
     }
   },
   "dependent_plugins": {}

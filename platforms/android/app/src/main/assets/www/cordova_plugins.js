@@ -180,9 +180,18 @@ cordova.define('cordova/plugin_list', function(require, exports, module) {
         "cordova"
       ],
       "runs": true
+    },
+    {
+      "id": "cordova-plugin-statusbar.statusbar",
+      "file": "plugins/cordova-plugin-statusbar/www/statusbar.js",
+      "pluginId": "cordova-plugin-statusbar",
+      "clobbers": [
+        "window.StatusBar"
+      ]
     }
   ];
   module.exports.metadata = {
-    "cordova-plugin-file": "8.1.3"
+    "cordova-plugin-file": "8.1.3",
+    "cordova-plugin-statusbar": "4.0.0"
   };
 });
