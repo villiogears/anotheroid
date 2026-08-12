@@ -1,6 +1,11 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, nextTick } from 'vue'
 
+// --- 画面遷移状態管理 ---
+// 'runner': WASM実行画面, 'library': 保存済みWASM一覧画面
+const currentView = ref<'runner' | 'library'>('runner')
+
+// --- UI / アプリ状態 ---
 const isDarkMode = ref<boolean>(false)
 const isLoaded = ref<boolean>(false)
 const isScriptLoaded = ref<boolean>(false)
@@ -9,6 +14,16 @@ const fileName = ref<string>('')
 const wasmType = ref<'canvas' | 'function'>('canvas')
 const isFullscreen = ref<boolean>(false)
 
+// --- ライブラリ画面用状態 ---
+interface StoredWasmFile {
+  name: string
+  size: number
+  updatedAt: Date
+}
+const savedFiles = ref<StoredWasmFile[]>([])
+const isLoadingList = ref<boolean>(false)
+
+// --- 数値計算型WASM用 ---
 const num1 = ref<number>(10)
 const num2 = ref<number>(25)
 const result = ref<number | string | null>(null)
@@ -21,6 +36,7 @@ interface ExportedFunc {
 const exportedFunctions = ref<ExportedFunc[]>([])
 const selectedFunc = ref<string>('')
 
+// --- WebAssembly / Canvas 参照 ---
 let wasmInstance: any = null
 let wasmModule: WebAssembly.Module | null = null
 const wasmCanvas = ref<HTMLCanvasElement | null>(null)
@@ -30,7 +46,7 @@ const isCordova = (): boolean => {
   return typeof (window as any).cordova !== 'undefined'
 }
 
-// wasm_exec.js の読み込み
+// public/wasm_exec.js の自動読み込み
 const loadWasmExecScript = (): Promise<void> => {
   return new Promise((resolve, reject) => {
     if ((window as any).Go) {
@@ -45,7 +61,7 @@ const loadWasmExecScript = (): Promise<void> => {
   })
 }
 
-// Cordovaの内部ストレージにWASMファイルを保存する
+// Cordova 内部ストレージへ書き込み
 const saveWasmToCordovaStorage = (fileName: string, buffer: ArrayBuffer): Promise<string> => {
   return new Promise((resolve, reject) => {
     const windowFile = (window as any).resolveLocalFileSystemURL
@@ -62,9 +78,7 @@ const saveWasmToCordovaStorage = (fileName: string, buffer: ArrayBuffer): Promis
           fileWriter.onwriteend = () => {
             resolve(fileEntry.toURL())
           }
-          fileWriter.onerror = (e: any) => {
-            reject(e)
-          }
+          fileWriter.onerror = (e: any) => reject(e)
           const blob = new Blob([buffer], { type: 'application/wasm' })
           fileWriter.write(blob)
         }, reject)
@@ -73,7 +87,7 @@ const saveWasmToCordovaStorage = (fileName: string, buffer: ArrayBuffer): Promis
   })
 }
 
-// Cordovaの内部ストレージから既存のWASMファイルを読み込む
+// Cordova 内部ストレージから特定ファイルを読み込み
 const loadWasmFromCordovaStorage = (fileName: string): Promise<ArrayBuffer> => {
   return new Promise((resolve, reject) => {
     const windowFile = (window as any).resolveLocalFileSystemURL
@@ -94,6 +108,87 @@ const loadWasmFromCordovaStorage = (fileName: string): Promise<ArrayBuffer> => {
       }, reject)
     }, reject)
   })
+}
+
+// 保存済み WASM ファイル一覧を取得する関数
+const fetchStoredWasmFiles = (): Promise<StoredWasmFile[]> => {
+  return new Promise((resolve, reject) => {
+    if (!isCordova()) {
+      resolve([])
+      return
+    }
+
+    const windowFile = (window as any).resolveLocalFileSystemURL
+    const storagePath = (window as any).cordova.file.dataDirectory
+
+    windowFile(storagePath, (dirEntry: any) => {
+      const directoryReader = dirEntry.createReader()
+      directoryReader.readEntries((entries: any[]) => {
+        const wasmEntries = entries.filter((e) => e.isFile && e.name.endsWith('.wasm'))
+        
+        const filePromises = wasmEntries.map((entry) => {
+          return new Promise<StoredWasmFile>((res) => {
+            entry.file((file: File) => {
+              res({
+                name: file.name,
+                size: file.size,
+                updatedAt: new Date(file.lastModified)
+              })
+            }, () => {
+              res({ name: entry.name, size: 0, updatedAt: new Date() })
+            })
+          })
+        })
+
+        Promise.all(filePromises).then((files) => resolve(files))
+      }, reject)
+    }, reject)
+  })
+}
+
+// ライブラリ一覧の更新処理
+const refreshLibrary = async () => {
+  isLoadingList.value = true
+  try {
+    savedFiles.value = await fetchStoredWasmFiles()
+  } catch (err) {
+    console.error('ファイル一覧取得エラー:', err)
+  } finally {
+    isLoadingList.value = false
+  }
+}
+
+// ファイル一覧からファイルを選択して即座にロード
+const selectAndLoadFromLibrary = async (fileItem: StoredWasmFile) => {
+  try {
+    statusMessage.value = `「${fileItem.name}」を読み込み中...`
+    currentView.value = 'runner' // 実行画面へ移動
+    const buffer = await loadWasmFromCordovaStorage(fileItem.name)
+    await loadWasmBuffer(buffer, fileItem.name)
+    localStorage.setItem('last_loaded_wasm', fileItem.name)
+  } catch (err) {
+    console.error('ライブラリからの復元エラー:', err)
+    statusMessage.value = 'ファイルの読み込みに失敗しました。'
+  }
+}
+
+// Cordova ストレージからファイルを削除
+const deleteWasmFromStorage = (fileNameToDelete: string) => {
+  if (!confirm(`「${fileNameToDelete}」を削除してもよろしいですか？`)) return
+
+  const windowFile = (window as any).resolveLocalFileSystemURL
+  const storagePath = (window as any).cordova.file.dataDirectory + fileNameToDelete
+
+  windowFile(storagePath, (fileEntry: any) => {
+    fileEntry.remove(() => {
+      if (localStorage.getItem('last_loaded_wasm') === fileNameToDelete) {
+        localStorage.removeItem('last_loaded_wasm')
+      }
+      refreshLibrary()
+    }, (err: any) => {
+      console.error('削除失敗:', err)
+    })
+  }, (err: any) => console.error('ファイルアクセス失敗:', err))
 }
 
 // WASMの解析・インスタンス化
@@ -151,12 +246,12 @@ const handleFileChange = async (event: Event) => {
       if (e.target?.result instanceof ArrayBuffer) {
         const buffer = e.target.result
         
-        // Cordova環境の場合は内部ストレージへ書き込み保存
         if (isCordova()) {
           try {
             statusMessage.value = 'アプリ内部ストレージに保存中...'
             await saveWasmToCordovaStorage(file.name, buffer)
             localStorage.setItem('last_loaded_wasm', file.name)
+            await refreshLibrary()
           } catch (err) {
             console.error('Cordova保存エラー:', err)
           }
@@ -186,6 +281,7 @@ const handleDrop = (event: DragEvent) => {
           try {
             await saveWasmToCordovaStorage(file.name, buffer)
             localStorage.setItem('last_loaded_wasm', file.name)
+            await refreshLibrary()
           } catch (err) {
             console.error('Cordova保存エラー:', err)
           }
@@ -270,19 +366,19 @@ const onFullscreenChange = () => {
   isFullscreen.value = !!document.fullscreenElement
 }
 
-// アプリ起動時の初期化処理
+// アプリ初期化処理
 const initApp = async () => {
   try {
     await loadWasmExecScript()
     isScriptLoaded.value = true
     statusMessage.value = 'WASMファイルを選択してください'
 
-    // Cordova環境の場合、前回保存されたファイルがあれば自動ロード
     if (isCordova()) {
+      await refreshLibrary()
       const lastSavedFile = localStorage.getItem('last_loaded_wasm')
       if (lastSavedFile) {
         try {
-          statusMessage.value = `保存済みファイル「${lastSavedFile}」を復元中...`
+          statusMessage.value = `「${lastSavedFile}」を復元中...`
           const buffer = await loadWasmFromCordovaStorage(lastSavedFile)
           await loadWasmBuffer(buffer, lastSavedFile)
         } catch (e) {
@@ -309,13 +405,23 @@ onMounted(() => {
 onUnmounted(() => {
   document.removeEventListener('fullscreenchange', onFullscreenChange)
 })
+
+// ファイルサイズをバイトから適切な単位にフォーマット
+const formatSize = (bytes: number): string => {
+  if (bytes === 0) return '0 B'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
+}
 </script>
 
 <template>
   <div class="app-shell" :class="{ 'dark-theme': isDarkMode }">
+    <!-- 上部 アプリバー -->
     <header class="md-top-app-bar">
       <div class="app-bar-brand">
-        <span class="material-icon"></span>
+        <span class="material-icons">extension</span>
         <h1>Anotheroid</h1>
       </div>
       
@@ -326,116 +432,189 @@ onUnmounted(() => {
       </div>
     </header>
 
+    <!-- メインコンテンツ（画面切り替え対応） -->
     <main class="main-content">
-      <section 
-        class="md-card upload-card"
-        @drop="handleDrop"
-        @dragover="handleDragOver"
-      >
-        <div class="upload-icon">
-          <img src="/3.svg" alt="アップロード" class="custom-icon-img" />
-        </div>
-        <h2>WASM モジュールをロード</h2>
-        <p>Golang Gio UIのwasmファイルに対応</p>
-
-        <div class="button-row">
-          <label class="md-button md-button-filled" :class="{ disabled: !isScriptLoaded }">
-            <img src="/3.svg" alt="追加" class="btn-icon-img" />
-            ファイルを選択
-            <input 
-              type="file" 
-              accept=".wasm" 
-              @change="handleFileChange" 
-              class="hidden-input"
-              :disabled="!isScriptLoaded"
-            />
-          </label>
-        </div>
-      </section>
-
-      <section class="md-card display-card">
-        <div class="card-header">
-          <div class="status-indicator" :class="{ active: isLoaded }">
-            <span class="pulse-dot"></span>
-            <span>{{ statusMessage }}</span>
+      
+      <!-- ページ 1: WASM 実行画面 -->
+      <template v-if="currentView === 'runner'">
+        <section 
+          class="md-card upload-card"
+          @drop="handleDrop"
+          @dragover="handleDragOver"
+        >
+          <div class="upload-icon">
+            <img src="/3.svg" alt="アップロード" class="custom-icon-img" />
           </div>
+          <h2>WASM モジュールをロード</h2>
+          <p>Golang Gio UIなどの.wasmファイルに対応</p>
 
-          <div class="control-actions" v-if="isLoaded">
-            <div class="segmented-button">
-              <button 
-                :class="{ active: wasmType === 'canvas' }" 
-                @click="wasmType = 'canvas'; nextTick(initCanvasDraw)"
-              >
-                GUI / Canvas
-              </button>
-              <button 
-                :class="{ active: wasmType === 'function' }" 
-                @click="wasmType = 'function'"
-              >
-                関数実行
-              </button>
+          <div class="button-row">
+            <label class="md-button md-button-filled" :class="{ disabled: !isScriptLoaded }">
+              <img src="/3.svg" alt="追加" class="btn-icon-img" />
+              ファイルを選択
+              <input 
+                type="file" 
+                accept=".wasm" 
+                @change="handleFileChange" 
+                class="hidden-input"
+                :disabled="!isScriptLoaded"
+              />
+            </label>
+          </div>
+        </section>
+
+        <section class="md-card display-card">
+          <div class="card-header">
+            <div class="status-indicator" :class="{ active: isLoaded }">
+              <span class="pulse-dot"></span>
+              <span>{{ statusMessage }}</span>
             </div>
 
+            <div class="control-actions" v-if="isLoaded">
+              <div class="segmented-button">
+                <button 
+                  :class="{ active: wasmType === 'canvas' }" 
+                  @click="wasmType = 'canvas'; nextTick(initCanvasDraw)"
+                >
+                  GUI / Canvas
+                </button>
+                <button 
+                  :class="{ active: wasmType === 'function' }" 
+                  @click="wasmType = 'function'"
+                >
+                  関数実行
+                </button>
+              </div>
+
+              <button 
+                v-if="wasmType === 'canvas'"
+                class="icon-btn" 
+                @click="toggleFullscreen" 
+                title="全画面表示"
+              >
+                <img src="/4.svg" alt="全画面表示" class="fullscreen-icon-img" />
+              </button>
+            </div>
+          </div>
+
+          <!-- 1. GUI / Canvas モード -->
+          <div 
+            v-show="isLoaded && wasmType === 'canvas'" 
+            id="wasm-container" 
+            class="canvas-container"
+            :class="{ 'is-fullscreen': isFullscreen }"
+          >
+            <canvas id="wasm-canvas" ref="wasmCanvas"></canvas>
+            
             <button 
-              v-if="wasmType === 'canvas'"
-              class="icon-btn" 
-              @click="toggleFullscreen" 
-              title="全画面表示"
+              v-if="isFullscreen" 
+              class="exit-fullscreen-btn md-button md-button-filled"
+              @click="toggleFullscreen"
             >
-              <img src="/4.svg" alt="全画面表示" class="fullscreen-icon-img" />
+              <img src="/4.svg" alt="全画面表示解除" class="btn-icon-img" />
+              全画面表示を解除
             </button>
           </div>
-        </div>
 
-        <!-- 1. GUI / Canvas モード -->
-        <div 
-          v-show="isLoaded && wasmType === 'canvas'" 
-          id="wasm-container" 
-          class="canvas-container"
-          :class="{ 'is-fullscreen': isFullscreen }"
-        >
-          <canvas id="wasm-canvas" ref="wasmCanvas"></canvas>
-          
-          <button 
-            v-if="isFullscreen" 
-            class="exit-fullscreen-btn md-button md-button-filled"
-            @click="toggleFullscreen"
-          >
-            <img src="/4.svg" alt="全画面表示解除" class="btn-icon-img" />
-            全画面表示を解除
-          </button>
-        </div>
-
-        <!-- 2. 関数呼び出しモード -->
-        <div v-show="isLoaded && wasmType === 'function'" class="function-container">
-          <div class="md-text-field" v-if="exportedFunctions.length > 0">
-            <label>実行関数:</label>
-            <select v-model="selectedFunc" @change="executeWasm" class="md-select">
-              <option v-for="fn in exportedFunctions" :key="fn.name" :value="fn.name">
-                {{ fn.name }} ()
-              </option>
-            </select>
-          </div>
-
-          <div class="inputs-grid">
-            <div class="input-item">
-              <label>引数 1 (a)</label>
-              <input v-model.number="num1" type="number" @input="executeWasm" class="md-input" />
+          <!-- 2. 関数呼び出しモード -->
+          <div v-show="isLoaded && wasmType === 'function'" class="function-container">
+            <div class="md-text-field" v-if="exportedFunctions.length > 0">
+              <label>実行関数:</label>
+              <select v-model="selectedFunc" @change="executeWasm" class="md-select">
+                <option v-for="fn in exportedFunctions" :key="fn.name" :value="fn.name">
+                  {{ fn.name }} ()
+                </option>
+              </select>
             </div>
-            <div class="input-item">
-              <label>引数 2 (b)</label>
-              <input v-model.number="num2" type="number" @input="executeWasm" class="md-input" />
+
+            <div class="inputs-grid">
+              <div class="input-item">
+                <label>引数 1 (a)</label>
+                <input v-model.number="num1" type="number" @input="executeWasm" class="md-input" />
+              </div>
+              <div class="input-item">
+                <label>引数 2 (b)</label>
+                <input v-model.number="num2" type="number" @input="executeWasm" class="md-input" />
+              </div>
+            </div>
+
+            <div class="result-card">
+              <span class="result-title">出力結果</span>
+              <div class="result-value">{{ result }}</div>
+              <span v-if="executionTime" class="execution-time">実行時間: {{ executionTime }} ms</span>
             </div>
           </div>
+        </section>
+      </template>
 
-          <div class="result-card">
-            <span class="result-title">出力結果</span>
-            <div class="result-value">{{ result }}</div>
-            <span v-if="executionTime" class="execution-time">実行時間: {{ executionTime }} ms</span>
+      <!-- ページ 2: 保存済みWASMアプリ一覧（ライブラリ）画面 -->
+      <template v-if="currentView === 'library'">
+        <section class="md-card library-card">
+          <div class="library-header">
+            <h2>保存済み WASM 一覧</h2>
+            <button class="icon-btn" @click="refreshLibrary" title="更新">
+              <span class="material-icons">refresh</span>
+            </button>
           </div>
-        </div>
-      </section>
+
+          <p class="library-desc">Androidアプリ内部ストレージに保存されているWASMモジュールです。タップして即座に起動できます。</p>
+
+          <div v-if="isLoadingList" class="loading-state">
+            <p>読み込み中...</p>
+          </div>
+
+          <div v-else-if="savedFiles.length === 0" class="empty-state">
+            <span class="material-icons empty-icon">folder_open</span>
+            <p>保存されているWASMファイルはありません。</p>
+            <p class="sub-text">メイン画面でWASMファイルを読み込むと自動的に保存されます。</p>
+          </div>
+
+          <ul v-else class="wasm-list">
+            <li v-for="file in savedFiles" :key="file.name" class="wasm-item">
+              <div class="wasm-info" @click="selectAndLoadFromLibrary(file)">
+                <div class="wasm-icon">
+                  <span class="material-icons">sports_esports</span>
+                </div>
+                <div class="wasm-details">
+                  <span class="wasm-name">{{ file.name }}</span>
+                  <span class="wasm-meta">{{ formatSize(file.size) }} • {{ file.updatedAt.toLocaleDateString() }}</span>
+                </div>
+              </div>
+              <div class="wasm-actions">
+                <button class="md-button md-button-filled sm-btn" @click="selectAndLoadFromLibrary(file)">
+                  起動
+                </button>
+                <button class="icon-btn delete-btn" @click="deleteWasmFromStorage(file.name)" title="削除">
+                  <span class="material-icons">delete_outline</span>
+                </button>
+              </div>
+            </li>
+          </ul>
+        </section>
+      </template>
+
     </main>
+
+    <!-- 下部 Android標準風 ボトムナビゲーションバー -->
+    <nav class="bottom-nav">
+      <button 
+        class="nav-item" 
+        :class="{ active: currentView === 'runner' }" 
+        @click="currentView = 'runner'"
+      >
+        <span class="material-icons">play_circle_filled</span>
+        <span class="nav-label">実行画面</span>
+      </button>
+
+      <button 
+        class="nav-item" 
+        :class="{ active: currentView === 'library' }" 
+        @click="currentView = 'library'; refreshLibrary()"
+      >
+        <span class="material-icons">apps</span>
+        <span class="nav-label">アプリ一覧</span>
+      </button>
+    </nav>
   </div>
 </template>
 
@@ -449,7 +628,7 @@ onUnmounted(() => {
   --md-sys-color-primary-hover: #1d4ed8;
   --md-sys-color-on-primary: #ffffff;
   --md-sys-color-text: #000000;
-  --md-sys-color-text-secondary: #000000;
+  --md-sys-color-text-secondary: #64748b;
   --md-sys-color-border: #e2e8f0;
   --md-sys-color-card-bg: #ffffff;
   --md-sys-color-container: #eff6ff;
@@ -463,7 +642,7 @@ onUnmounted(() => {
   --md-sys-color-primary-hover: #60a5fa;
   --md-sys-color-on-primary: #ffffff;
   --md-sys-color-text: #ffffff;
-  --md-sys-color-text-secondary: #ffffff;
+  --md-sys-color-text-secondary: #94a3b8;
   --md-sys-color-border: #334155;
   --md-sys-color-card-bg: #1e293b;
   --md-sys-color-container: #1e3a8a;
@@ -483,8 +662,11 @@ body {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+  padding-bottom: 70px; /* ボトムバー分の余白を確保 */
+  box-sizing: border-box;
 }
 
+/* アプリバー */
 .md-top-app-bar {
   display: flex;
   justify-content: space-between;
@@ -607,14 +789,10 @@ body {
   background-color: var(--md-sys-color-primary-hover);
 }
 
-.md-button-outlined {
-  background-color: transparent;
-  border: 1px solid var(--md-sys-color-border);
-  color: var(--md-sys-color-text);
-}
-
-.md-button-outlined:hover {
-  background-color: var(--md-sys-color-container);
+.sm-btn {
+  padding: 6px 14px;
+  font-size: 0.8rem;
+  border-radius: 12px;
 }
 
 .hidden-input {
@@ -793,5 +971,152 @@ canvas {
   color: var(--md-sys-color-on-container);
   opacity: 0.8;
   display: block;
+}
+
+/* --- 保存済みWASMライブラリ画面スタイル --- */
+.library-card {
+  padding: 20px;
+}
+
+.library-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.library-header h2 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.library-desc {
+  font-size: 0.85rem;
+  color: var(--md-sys-color-text-secondary);
+  margin: 6px 0 20px 0;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 40px 10px;
+  color: var(--md-sys-color-text-secondary);
+}
+
+.empty-icon {
+  font-size: 48px;
+  margin-bottom: 8px;
+  opacity: 0.5;
+}
+
+.sub-text {
+  font-size: 0.75rem;
+}
+
+.wasm-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.wasm-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px;
+  border: 1px solid var(--md-sys-color-border);
+  border-radius: 12px;
+  margin-bottom: 10px;
+  background-color: var(--md-sys-color-surface);
+  transition: background-color 0.2s;
+}
+
+.wasm-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  cursor: pointer;
+}
+
+.wasm-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background-color: var(--md-sys-color-container);
+  color: var(--md-sys-color-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wasm-details {
+  display: flex;
+  flex-direction: column;
+}
+
+.wasm-name {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.wasm-meta {
+  font-size: 0.75rem;
+  color: var(--md-sys-color-text-secondary);
+  margin-top: 2px;
+}
+
+.wasm-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.delete-btn {
+  color: #ef4444;
+}
+
+/* --- Android風ボトムナビゲーションバー --- */
+.bottom-nav {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 64px;
+  background-color: var(--md-sys-color-surface);
+  border-top: 1px solid var(--md-sys-color-border);
+  display: flex;
+  justify-content: space-around;
+  align-items: center;
+  z-index: 1000;
+}
+
+.nav-item {
+  background: none;
+  border: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  color: var(--md-sys-color-text-secondary);
+  cursor: pointer;
+  flex: 1;
+  padding: 8px 0;
+}
+
+.nav-item .material-icons {
+  font-size: 24px;
+}
+
+.nav-label {
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.nav-item.active {
+  color: var(--md-sys-color-primary);
+}
+
+.nav-item.active .material-icons {
+  transform: scale(1.1);
+  transition: transform 0.2s;
 }
 </style>
