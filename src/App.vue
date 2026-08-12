@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, nextTick } from 'vue'
 
-// リアクティブ変数の定義
 const isDarkMode = ref<boolean>(false)
 const isLoaded = ref<boolean>(false)
 const isScriptLoaded = ref<boolean>(false)
@@ -10,7 +9,6 @@ const fileName = ref<string>('')
 const wasmType = ref<'canvas' | 'function'>('canvas')
 const isFullscreen = ref<boolean>(false)
 
-// 数値計算型WASM用
 const num1 = ref<number>(10)
 const num2 = ref<number>(25)
 const result = ref<number | string | null>(null)
@@ -23,14 +21,16 @@ interface ExportedFunc {
 const exportedFunctions = ref<ExportedFunc[]>([])
 const selectedFunc = ref<string>('')
 
-// WebAssembly インスタンス
 let wasmInstance: any = null
 let wasmModule: WebAssembly.Module | null = null
-
-// Canvas 参照
 const wasmCanvas = ref<HTMLCanvasElement | null>(null)
 
-// public/wasm_exec.js を動的に読み込む関数
+// Cordovaが有効か判定
+const isCordova = (): boolean => {
+  return typeof (window as any).cordova !== 'undefined'
+}
+
+// wasm_exec.js の読み込み
 const loadWasmExecScript = (): Promise<void> => {
   return new Promise((resolve, reject) => {
     if ((window as any).Go) {
@@ -45,40 +45,62 @@ const loadWasmExecScript = (): Promise<void> => {
   })
 }
 
-// テーマ切り替え
-const toggleTheme = () => {
-  isDarkMode.value = !isDarkMode.value
-  if (isDarkMode.value) {
-    document.documentElement.classList.add('dark')
-  } else {
-    document.documentElement.classList.remove('dark')
-  }
+// Cordovaの内部ストレージにWASMファイルを保存する
+const saveWasmToCordovaStorage = (fileName: string, buffer: ArrayBuffer): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const windowFile = (window as any).resolveLocalFileSystemURL
+    if (!windowFile) {
+      reject(new Error('Cordova File Plugin が利用できません'))
+      return
+    }
+
+    const storagePath = (window as any).cordova.file.dataDirectory
+
+    windowFile(storagePath, (dirEntry: any) => {
+      dirEntry.getFile(fileName, { create: true, exclusive: false }, (fileEntry: any) => {
+        fileEntry.createWriter((fileWriter: any) => {
+          fileWriter.onwriteend = () => {
+            resolve(fileEntry.toURL())
+          }
+          fileWriter.onerror = (e: any) => {
+            reject(e)
+          }
+          const blob = new Blob([buffer], { type: 'application/wasm' })
+          fileWriter.write(blob)
+        }, reject)
+      }, reject)
+    }, reject)
+  })
 }
 
-// 全画面切り替え
-const toggleFullscreen = () => {
-  const element = document.getElementById('wasm-container')
-  if (!element) return
+// Cordovaの内部ストレージから既存のWASMファイルを読み込む
+const loadWasmFromCordovaStorage = (fileName: string): Promise<ArrayBuffer> => {
+  return new Promise((resolve, reject) => {
+    const windowFile = (window as any).resolveLocalFileSystemURL
+    const storagePath = (window as any).cordova.file.dataDirectory + fileName
 
-  if (!document.fullscreenElement) {
-    element.requestFullscreen().then(() => {
-      isFullscreen.value = true
-    }).catch(err => {
-      console.error('全画面表示エラー:', err)
-    })
-  } else {
-    document.exitFullscreen().then(() => {
-      isFullscreen.value = false
-    })
-  }
+    windowFile(storagePath, (fileEntry: any) => {
+      fileEntry.file((file: File) => {
+        const reader = new FileReader()
+        reader.onloadend = () => {
+          if (reader.result instanceof ArrayBuffer) {
+            resolve(reader.result)
+          } else {
+            reject(new Error('ArrayBufferの取得に失敗しました'))
+          }
+        }
+        reader.onerror = reject
+        reader.readAsArrayBuffer(file)
+      }, reject)
+    }, reject)
+  })
 }
 
-// WASM ArrayBuffer からの読み込み処理
+// WASMの解析・インスタンス化
 const loadWasmBuffer = async (buffer: ArrayBuffer, name: string) => {
   try {
     statusMessage.value = 'WebAssembly モジュールを解析中...'
-    
-    // Go (wasm_exec.js) のインスタンス化
+
     const go = (window as any).Go ? new (window as any).Go() : null
     const importObject = go ? go.importObject : {}
 
@@ -86,13 +108,11 @@ const loadWasmBuffer = async (buffer: ArrayBuffer, name: string) => {
     wasmInstance = instantiated.instance
     wasmModule = instantiated.module
 
-    // GoのWASMエントリーポイント実行 (Gio UI等)
     if (go && typeof go.run === 'function') {
       go.run(wasmInstance)
       wasmType.value = 'canvas'
     }
 
-    // エクスポート関数の検出
     const exportsInfo = WebAssembly.Module.exports(wasmModule)
     exportedFunctions.value = exportsInfo.filter(exp => exp.kind === 'function')
 
@@ -121,33 +141,28 @@ const loadWasmBuffer = async (buffer: ArrayBuffer, name: string) => {
   }
 }
 
-// Canvas 描画の初期化
-const initCanvasDraw = () => {
-  if (!wasmCanvas.value) return
-  const ctx = wasmCanvas.value.getContext('2d')
-  if (!ctx) return
-
-  wasmCanvas.value.width = wasmCanvas.value.parentElement?.clientWidth || 600
-  wasmCanvas.value.height = 400
-
-  ctx.fillStyle = isDarkMode.value ? '#111827' : '#f3f4f6'
-  ctx.fillRect(0, 0, wasmCanvas.value.width, wasmCanvas.value.height)
-  
-  ctx.fillStyle = isDarkMode.value ? '#ffffff' : '#000000'
-  ctx.font = 'bold 20px sans-serif'
-  ctx.textAlign = 'center'
-  ctx.fillText('WASM GUI', wasmCanvas.value.width / 2, wasmCanvas.value.height / 2)
-}
-
 // ファイル選択ハンドラー
-const handleFileChange = (event: Event) => {
+const handleFileChange = async (event: Event) => {
   const target = event.target as HTMLInputElement
   if (target.files && target.files[0]) {
     const file = target.files[0]
     const reader = new FileReader()
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       if (e.target?.result instanceof ArrayBuffer) {
-        loadWasmBuffer(e.target.result, file.name)
+        const buffer = e.target.result
+        
+        // Cordova環境の場合は内部ストレージへ書き込み保存
+        if (isCordova()) {
+          try {
+            statusMessage.value = 'アプリ内部ストレージに保存中...'
+            await saveWasmToCordovaStorage(file.name, buffer)
+            localStorage.setItem('last_loaded_wasm', file.name)
+          } catch (err) {
+            console.error('Cordova保存エラー:', err)
+          }
+        }
+        
+        loadWasmBuffer(buffer, file.name)
       }
     }
     reader.readAsArrayBuffer(file)
@@ -164,9 +179,18 @@ const handleDrop = (event: DragEvent) => {
       return
     }
     const reader = new FileReader()
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       if (e.target?.result instanceof ArrayBuffer) {
-        loadWasmBuffer(e.target.result, file.name)
+        const buffer = e.target.result
+        if (isCordova()) {
+          try {
+            await saveWasmToCordovaStorage(file.name, buffer)
+            localStorage.setItem('last_loaded_wasm', file.name)
+          } catch (err) {
+            console.error('Cordova保存エラー:', err)
+          }
+        }
+        loadWasmBuffer(buffer, file.name)
       }
     }
     reader.readAsArrayBuffer(file)
@@ -177,7 +201,6 @@ const handleDragOver = (event: DragEvent) => {
   event.preventDefault()
 }
 
-// 選択された WASM 関数を実行
 const executeWasm = () => {
   if (!wasmInstance || !selectedFunc.value) return
 
@@ -200,21 +223,86 @@ const executeWasm = () => {
   }
 }
 
+const initCanvasDraw = () => {
+  if (!wasmCanvas.value) return
+  const ctx = wasmCanvas.value.getContext('2d')
+  if (!ctx) return
+
+  wasmCanvas.value.width = wasmCanvas.value.parentElement?.clientWidth || 600
+  wasmCanvas.value.height = 400
+
+  ctx.fillStyle = isDarkMode.value ? '#111827' : '#f3f4f6'
+  ctx.fillRect(0, 0, wasmCanvas.value.width, wasmCanvas.value.height)
+  
+  ctx.fillStyle = isDarkMode.value ? '#ffffff' : '#000000'
+  ctx.font = 'bold 20px sans-serif'
+  ctx.textAlign = 'center'
+  ctx.fillText('WASM GUI', wasmCanvas.value.width / 2, wasmCanvas.value.height / 2)
+}
+
+const toggleTheme = () => {
+  isDarkMode.value = !isDarkMode.value
+  if (isDarkMode.value) {
+    document.documentElement.classList.add('dark')
+  } else {
+    document.documentElement.classList.remove('dark')
+  }
+}
+
+const toggleFullscreen = () => {
+  const element = document.getElementById('wasm-container')
+  if (!element) return
+
+  if (!document.fullscreenElement) {
+    element.requestFullscreen().then(() => {
+      isFullscreen.value = true
+    }).catch(err => {
+      console.error('全画面表示エラー:', err)
+    })
+  } else {
+    document.exitFullscreen().then(() => {
+      isFullscreen.value = false
+    })
+  }
+}
+
 const onFullscreenChange = () => {
   isFullscreen.value = !!document.fullscreenElement
 }
 
-onMounted(async () => {
-  document.addEventListener('fullscreenchange', onFullscreenChange)
-  
-  // wasm_exec.js の事前読み込み
+// アプリ起動時の初期化処理
+const initApp = async () => {
   try {
     await loadWasmExecScript()
     isScriptLoaded.value = true
     statusMessage.value = 'WASMファイルを選択してください'
+
+    // Cordova環境の場合、前回保存されたファイルがあれば自動ロード
+    if (isCordova()) {
+      const lastSavedFile = localStorage.getItem('last_loaded_wasm')
+      if (lastSavedFile) {
+        try {
+          statusMessage.value = `保存済みファイル「${lastSavedFile}」を復元中...`
+          const buffer = await loadWasmFromCordovaStorage(lastSavedFile)
+          await loadWasmBuffer(buffer, lastSavedFile)
+        } catch (e) {
+          statusMessage.value = 'WASMファイルを選択してください'
+        }
+      }
+    }
   } catch (err) {
     console.error(err)
-    statusMessage.value = 'wasm_exec.js の読み込みに失敗しました (publicフォルダを確認してください)'
+    statusMessage.value = 'wasm_exec.js の読み込みに失敗しました'
+  }
+}
+
+onMounted(() => {
+  document.addEventListener('fullscreenchange', onFullscreenChange)
+  
+  if (isCordova()) {
+    document.addEventListener('deviceready', initApp, false)
+  } else {
+    initApp()
   }
 })
 
@@ -352,10 +440,8 @@ onUnmounted(() => {
 </template>
 
 <style>
-/* Material Icons の読み込み */
 @import url('https://fonts.googleapis.com/icon?family=Material+Icons');
 
-/* グローバルカラー定義 */
 :root {
   --md-sys-color-bg: #f8fafc;
   --md-sys-color-surface: #ffffff;
@@ -399,7 +485,6 @@ body {
   flex-direction: column;
 }
 
-/* アプリバー */
 .md-top-app-bar {
   display: flex;
   justify-content: space-between;
@@ -431,7 +516,6 @@ body {
   box-sizing: border-box;
 }
 
-/* Material Card */
 .md-card {
   background-color: var(--md-sys-color-card-bg);
   border: 1px solid var(--md-sys-color-border);
@@ -441,7 +525,6 @@ body {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
 }
 
-/* アップロード領域 */
 .upload-card {
   text-align: center;
   border: 2px dashed var(--md-sys-color-primary);
@@ -497,7 +580,6 @@ body {
   gap: 12px;
 }
 
-/* Material Buttons */
 .md-button {
   display: inline-flex;
   align-items: center;
@@ -561,7 +643,6 @@ body {
   display: block;
 }
 
-/* ステータスバー & コントロール */
 .card-header {
   display: flex;
   justify-content: space-between;
@@ -597,7 +678,6 @@ body {
   gap: 12px;
 }
 
-/* Segmented Button (タブ切り替え) */
 .segmented-button {
   display: flex;
   border: 1px solid var(--md-sys-color-border);
@@ -620,7 +700,6 @@ body {
   font-weight: bold;
 }
 
-/* Canvas / Fullscreen */
 .canvas-container {
   position: relative;
   width: 100%;
@@ -656,7 +735,6 @@ canvas {
   z-index: 10000;
 }
 
-/* 関数実行フォーム */
 .md-text-field {
   margin-bottom: 16px;
 }
