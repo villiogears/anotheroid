@@ -1,0 +1,60 @@
+name: Build Android (Cordova + Vite + Vue)
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build web assets (Vite)
+        run: npm run build
+
+      - name: Setup Java (OpenJDK 17)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Add Cordova Android platform and build
+        run: |
+          # package.json に cordova がない場合はローカル開発用にインストール
+          npm install cordova --no-save
+
+          # Android プラットフォームの追加
+          npx cordova platform add android --nosave || true
+
+          # Vite のビルド出力 (dist) を Cordova の www へコピー
+          if [ -d ./dist ]; then
+            rsync -a --delete ./dist/ ./www/
+          fi
+
+          # Cordova のビルド実行
+          npx cordova prepare android
+          npx cordova build android --release || npx cordova build android
+
+      - name: Upload APK artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: |
+            ./platforms/android/app/build/outputs/**/*.apk
