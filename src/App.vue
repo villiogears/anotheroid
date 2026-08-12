@@ -4,7 +4,8 @@ import { ref, onMounted, onUnmounted, nextTick } from 'vue'
 // リアクティブ変数の定義
 const isDarkMode = ref<boolean>(false)
 const isLoaded = ref<boolean>(false)
-const statusMessage = ref<string>('WASMファイルを選択してください')
+const isScriptLoaded = ref<boolean>(false)
+const statusMessage = ref<string>('wasm_exec.js を読み込み中...')
 const fileName = ref<string>('')
 const wasmType = ref<'canvas' | 'function'>('canvas')
 const isFullscreen = ref<boolean>(false)
@@ -28,6 +29,21 @@ let wasmModule: WebAssembly.Module | null = null
 
 // Canvas 参照
 const wasmCanvas = ref<HTMLCanvasElement | null>(null)
+
+// public/wasm_exec.js を動的に読み込む関数
+const loadWasmExecScript = (): Promise<void> => {
+  return new Promise((resolve, reject) => {
+    if ((window as any).Go) {
+      resolve()
+      return
+    }
+    const script = document.createElement('script')
+    script.src = '/wasm_exec.js'
+    script.onload = () => resolve()
+    script.onerror = () => reject(new Error('wasm_exec.js の読み込みに失敗しました'))
+    document.head.appendChild(script)
+  })
+}
 
 // テーマ切り替え
 const toggleTheme = () => {
@@ -62,19 +78,17 @@ const loadWasmBuffer = async (buffer: ArrayBuffer, name: string) => {
   try {
     statusMessage.value = 'WebAssembly モジュールを解析中...'
     
-    // Go (wasm_exec.js) などの環境変数の互換性チェック
+    // Go (wasm_exec.js) のインスタンス化
     const go = (window as any).Go ? new (window as any).Go() : null
     const importObject = go ? go.importObject : {}
 
-    wasmModule = await WebAssembly.compile(buffer)
-    
-    // インスタンス化
-    const instance = await WebAssembly.instantiate(wasmModule, importObject)
-    wasmInstance = instance
+    const instantiated = await WebAssembly.instantiate(buffer, importObject)
+    wasmInstance = instantiated.instance
+    wasmModule = instantiated.module
 
     // GoのWASMエントリーポイント実行 (Gio UI等)
     if (go && typeof go.run === 'function') {
-      go.run(instance)
+      go.run(wasmInstance)
       wasmType.value = 'canvas'
     }
 
@@ -84,7 +98,6 @@ const loadWasmBuffer = async (buffer: ArrayBuffer, name: string) => {
 
     if (exportedFunctions.value.length > 0) {
       selectedFunc.value = exportedFunctions.value[0].name
-      // Canvas描画系のWASM（Gio / Ebitengine / Rust / Emscripten等）の判定
       const hasMainOrRun = exportedFunctions.value.some(f => ['main', 'run', '_main', 'step'].includes(f.name))
       if (hasMainOrRun && !go) {
         wasmType.value = 'canvas'
@@ -108,7 +121,7 @@ const loadWasmBuffer = async (buffer: ArrayBuffer, name: string) => {
   }
 }
 
-// デモ用 Canvas 描画の初期化
+// Canvas 描画の初期化
 const initCanvasDraw = () => {
   if (!wasmCanvas.value) return
   const ctx = wasmCanvas.value.getContext('2d')
@@ -191,8 +204,18 @@ const onFullscreenChange = () => {
   isFullscreen.value = !!document.fullscreenElement
 }
 
-onMounted(() => {
+onMounted(async () => {
   document.addEventListener('fullscreenchange', onFullscreenChange)
+  
+  // wasm_exec.js の事前読み込み
+  try {
+    await loadWasmExecScript()
+    isScriptLoaded.value = true
+    statusMessage.value = 'WASMファイルを選択してください'
+  } catch (err) {
+    console.error(err)
+    statusMessage.value = 'wasm_exec.js の読み込みに失敗しました (publicフォルダを確認してください)'
+  }
 })
 
 onUnmounted(() => {
@@ -228,7 +251,7 @@ onUnmounted(() => {
         <p>Golang Gio UIのwasmファイルに対応</p>
 
         <div class="button-row">
-          <label class="md-button md-button-filled">
+          <label class="md-button md-button-filled" :class="{ disabled: !isScriptLoaded }">
             <img src="/3.svg" alt="追加" class="btn-icon-img" />
             ファイルを選択
             <input 
@@ -236,6 +259,7 @@ onUnmounted(() => {
               accept=".wasm" 
               @change="handleFileChange" 
               class="hidden-input"
+              :disabled="!isScriptLoaded"
             />
           </label>
         </div>
@@ -487,12 +511,17 @@ body {
   transition: all 0.2s;
 }
 
+.md-button.disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .md-button-filled {
   background-color: var(--md-sys-color-primary);
   color: var(--md-sys-color-on-primary);
 }
 
-.md-button-filled:hover {
+.md-button-filled:hover:not(.disabled) {
   background-color: var(--md-sys-color-primary-hover);
 }
 
