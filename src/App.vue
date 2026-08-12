@@ -2,7 +2,6 @@
 import { ref, onMounted, onUnmounted, nextTick } from 'vue'
 
 // --- 画面遷移状態管理 ---
-// 'runner': WASM実行画面, 'library': 保存済みWASM一覧画面
 const currentView = ref<'runner' | 'library'>('runner')
 
 // --- UI / アプリ状態 ---
@@ -163,7 +162,7 @@ const refreshLibrary = async () => {
 const selectAndLoadFromLibrary = async (fileItem: StoredWasmFile) => {
   try {
     statusMessage.value = `「${fileItem.name}」を読み込み中...`
-    currentView.value = 'runner' // 実行画面へ移動
+    currentView.value = 'runner'
     const buffer = await loadWasmFromCordovaStorage(fileItem.name)
     await loadWasmBuffer(buffer, fileItem.name)
     localStorage.setItem('last_loaded_wasm', fileItem.name)
@@ -192,12 +191,13 @@ const deleteWasmFromStorage = (fileNameToDelete: string) => {
   }, (err: any) => console.error('ファイルアクセス失敗:', err))
 }
 
-// GioUI 用 Canvas 初期化処理
+// GioUI 用 Canvas 初期化処理 (修正点: IDとサイズ計算を調整)
 const setupGioCanvas = () => {
   const canvas = wasmCanvas.value
   if (!canvas) return
 
-  canvas.id = 'gio-canvas'
+  // ID を Gio UI が標準参照する 'gioui-canvas' に設定
+  canvas.id = 'gioui-canvas'
   canvas.tabIndex = 1
   canvas.focus()
 
@@ -209,8 +209,11 @@ const setupGioCanvas = () => {
     canvas.style.width = `${rect.width}px`
     canvas.style.height = `${rect.height}px`
 
-    canvas.width = rect.width * dpr
-    canvas.height = rect.height * dpr
+    canvas.width = Math.floor(rect.width * dpr)
+    canvas.height = Math.floor(rect.height * dpr)
+
+    // リサイズイベントを人工的に発行して Gio UI に伝達
+    window.dispatchEvent(new Event('resize'))
   }
 
   updateCanvasSize()
@@ -232,6 +235,7 @@ const loadWasmBuffer = async (buffer: ArrayBuffer, name: string) => {
     wasmType.value = 'canvas'
     await nextTick()
 
+    // WASM 起動前に Canvas の準備を完了させる
     setupGioCanvas()
 
     const go = (window as any).Go ? new (window as any).Go() : null
@@ -363,18 +367,21 @@ const toggleFullscreen = () => {
   if (!document.fullscreenElement) {
     element.requestFullscreen().then(() => {
       isFullscreen.value = true
+      nextTick(setupGioCanvas)
     }).catch(err => {
       console.error('全画面表示エラー:', err)
     })
   } else {
     document.exitFullscreen().then(() => {
       isFullscreen.value = false
+      nextTick(setupGioCanvas)
     })
   }
 }
 
 const onFullscreenChange = () => {
   isFullscreen.value = !!document.fullscreenElement
+  nextTick(setupGioCanvas)
 }
 
 // アプリ初期化処理
@@ -518,8 +525,9 @@ const formatSize = (bytes: number): string => {
             class="canvas-container"
             :class="{ 'is-fullscreen': isFullscreen }"
           >
+            <!-- Gio UI が参照できるよう id="gioui-canvas" を設定 -->
             <canvas 
-              id="gio-canvas" 
+              id="gioui-canvas" 
               ref="wasmCanvas"
               tabindex="1"
               @mousedown="wasmCanvas?.focus()"
@@ -909,7 +917,7 @@ body {
   align-items: center;
 }
 
-canvas#gio-canvas {
+canvas#gioui-canvas {
   width: 100%;
   height: 100%;
   display: block;
