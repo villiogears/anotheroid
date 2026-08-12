@@ -225,7 +225,7 @@ onUnmounted(() => {
           <img src="/3.svg" alt="アップロード" class="custom-icon-img" />
         </div>
         <h2>WASM モジュールをロード</h2>
-        <p>Golang (Gio UI等)、Rust、C++などの `GUIを描画する系統のwasm` ファイルに対応</p>
+        <p>主に、Golang (Gio UI等)、Rust、C++などの `GUIを描画する系統のwasm` ファイルに対応</p>
 
         <div class="button-row">
           <label class="md-button md-button-filled">
