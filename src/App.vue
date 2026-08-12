@@ -40,6 +40,7 @@ const selectedFunc = ref<string>('')
 let wasmInstance: any = null
 let wasmModule: WebAssembly.Module | null = null
 const wasmCanvas = ref<HTMLCanvasElement | null>(null)
+let resizeObserver: ResizeObserver | null = null
 
 // Cordovaが有効か判定
 const isCordova = (): boolean => {
@@ -191,10 +192,47 @@ const deleteWasmFromStorage = (fileNameToDelete: string) => {
   }, (err: any) => console.error('ファイルアクセス失敗:', err))
 }
 
+// GioUI 用 Canvas 初期化処理
+const setupGioCanvas = () => {
+  const canvas = wasmCanvas.value
+  if (!canvas) return
+
+  canvas.id = 'gio-canvas'
+  canvas.tabIndex = 1
+  canvas.focus()
+
+  const updateCanvasSize = () => {
+    if (!canvas.parentElement) return
+    const rect = canvas.parentElement.getBoundingClientRect()
+    const dpr = window.devicePixelRatio || 1
+
+    canvas.style.width = `${rect.width}px`
+    canvas.style.height = `${rect.height}px`
+
+    canvas.width = rect.width * dpr
+    canvas.height = rect.height * dpr
+  }
+
+  updateCanvasSize()
+
+  if (resizeObserver) resizeObserver.disconnect()
+  resizeObserver = new ResizeObserver(() => {
+    updateCanvasSize()
+  })
+  if (canvas.parentElement) {
+    resizeObserver.observe(canvas.parentElement)
+  }
+}
+
 // WASMの解析・インスタンス化
 const loadWasmBuffer = async (buffer: ArrayBuffer, name: string) => {
   try {
     statusMessage.value = 'WebAssembly モジュールを解析中...'
+
+    wasmType.value = 'canvas'
+    await nextTick()
+
+    setupGioCanvas()
 
     const go = (window as any).Go ? new (window as any).Go() : null
     const importObject = go ? go.importObject : {}
@@ -203,9 +241,14 @@ const loadWasmBuffer = async (buffer: ArrayBuffer, name: string) => {
     wasmInstance = instantiated.instance
     wasmModule = instantiated.module
 
+    fileName.value = name
+    isLoaded.value = true
+    statusMessage.value = `「${name}」を実行中`
+
     if (go && typeof go.run === 'function') {
-      go.run(wasmInstance)
-      wasmType.value = 'canvas'
+      go.run(wasmInstance).catch((err: any) => {
+        console.error('Go run error:', err)
+      })
     }
 
     const exportsInfo = WebAssembly.Module.exports(wasmModule)
@@ -213,26 +256,11 @@ const loadWasmBuffer = async (buffer: ArrayBuffer, name: string) => {
 
     if (exportedFunctions.value.length > 0) {
       selectedFunc.value = exportedFunctions.value[0].name
-      const hasMainOrRun = exportedFunctions.value.some(f => ['main', 'run', '_main', 'step'].includes(f.name))
-      if (hasMainOrRun && !go) {
-        wasmType.value = 'canvas'
-      }
-    }
-
-    fileName.value = name
-    isLoaded.value = true
-    statusMessage.value = `「${name}」を正常に読み込みました`
-
-    await nextTick()
-    if (wasmType.value === 'function') {
-      executeWasm()
-    } else {
-      initCanvasDraw()
     }
   } catch (error) {
     console.error('WASM 読み込みエラー:', error)
     isLoaded.value = false
-    statusMessage.value = 'WASM ファイルの解析に失敗しました。'
+    statusMessage.value = 'WASM ファイルの解析・実行に失敗しました。'
   }
 }
 
@@ -319,23 +347,6 @@ const executeWasm = () => {
   }
 }
 
-const initCanvasDraw = () => {
-  if (!wasmCanvas.value) return
-  const ctx = wasmCanvas.value.getContext('2d')
-  if (!ctx) return
-
-  wasmCanvas.value.width = wasmCanvas.value.parentElement?.clientWidth || 600
-  wasmCanvas.value.height = 400
-
-  ctx.fillStyle = isDarkMode.value ? '#111827' : '#f3f4f6'
-  ctx.fillRect(0, 0, wasmCanvas.value.width, wasmCanvas.value.height)
-  
-  ctx.fillStyle = isDarkMode.value ? '#ffffff' : '#000000'
-  ctx.font = 'bold 20px sans-serif'
-  ctx.textAlign = 'center'
-  ctx.fillText('WASM GUI', wasmCanvas.value.width / 2, wasmCanvas.value.height / 2)
-}
-
 const toggleTheme = () => {
   isDarkMode.value = !isDarkMode.value
   if (isDarkMode.value) {
@@ -404,6 +415,9 @@ onMounted(() => {
 
 onUnmounted(() => {
   document.removeEventListener('fullscreenchange', onFullscreenChange)
+  if (resizeObserver) {
+    resizeObserver.disconnect()
+  }
 })
 
 // ファイルサイズをバイトから適切な単位にフォーマット
@@ -474,7 +488,7 @@ const formatSize = (bytes: number): string => {
               <div class="segmented-button">
                 <button 
                   :class="{ active: wasmType === 'canvas' }" 
-                  @click="wasmType = 'canvas'; nextTick(initCanvasDraw)"
+                  @click="wasmType = 'canvas'; nextTick(setupGioCanvas)"
                 >
                   GUI / Canvas
                 </button>
@@ -504,7 +518,12 @@ const formatSize = (bytes: number): string => {
             class="canvas-container"
             :class="{ 'is-fullscreen': isFullscreen }"
           >
-            <canvas id="wasm-canvas" ref="wasmCanvas"></canvas>
+            <canvas 
+              id="gio-canvas" 
+              ref="wasmCanvas"
+              tabindex="1"
+              @mousedown="wasmCanvas?.focus()"
+            ></canvas>
             
             <button 
               v-if="isFullscreen" 
@@ -662,7 +681,7 @@ body {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-  padding-bottom: 70px; /* ボトムバー分の余白を確保 */
+  padding-bottom: 70px;
   box-sizing: border-box;
 }
 
@@ -881,19 +900,21 @@ body {
 .canvas-container {
   position: relative;
   width: 100%;
+  height: 450px;
   background-color: #000;
   border-radius: 12px;
   overflow: hidden;
   display: flex;
   justify-content: center;
   align-items: center;
-  min-height: 400px;
 }
 
-canvas {
-  max-width: 100%;
-  height: auto;
+canvas#gio-canvas {
+  width: 100%;
+  height: 100%;
   display: block;
+  outline: none;
+  touch-action: none;
 }
 
 .canvas-container.is-fullscreen {
